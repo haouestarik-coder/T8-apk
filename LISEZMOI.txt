@@ -1,0 +1,17 @@
+T8 Translator - projet Android (version 0.1)
+
+BUT : se connecter au traducteur T8+ ("ABCTransBLE") et lire les appuis longs sur les boutons rouge et bleu.
+
+AVANT DE TESTER
+1. Appairer "ABCTrans" dans Paramètres > Bluetooth du téléphone (c'est le canal audio).
+2. Installer l'APK, ouvrir l'application, appuyer sur "Connecter le T8+", accepter les permissions.
+3. Faire un appui long sur le bouton rouge puis bleu : les évènements s'affichent dans le journal.
+
+COMPILER SANS PC (GitHub, depuis un navigateur)
+1. Créer un compte et un dépôt sur github.com (privé, c'est gratuit).
+2. Envoyer tout le contenu de ce dossier (y compris le dossier .github) dans le dépôt.
+3. Onglet "Actions" > "Build APK" > "Run workflow".
+4. Quand c'est terminé, ouvrir l'exécution et télécharger l'artefact "T8Translator-APK" (un zip contenant app-debug.apk).
+
+COMPILER AVEC ANDROID STUDIO (PC)
+Ouvrir ce dossier, laisser la synchronisation Gradle se faire, puis Build > Build APK.
