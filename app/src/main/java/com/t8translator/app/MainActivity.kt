@@ -12,38 +12,69 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
+import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
+import java.util.Locale
 import java.util.UUID
 
 private fun uuid16(v: Int): UUID =
     UUID.fromString(String.format("0000%04x-0000-1000-8000-00805f9b34fb", v))
 
+data class Lang(val name: String, val tag: String, val ml: String)
+
+private val LANGS = listOf(
+    Lang("Français", "fr-FR", "fr"),
+    Lang("English", "en-US", "en"),
+    Lang("العربية", "ar-SA", "ar"),
+    Lang("Español", "es-ES", "es"),
+    Lang("Deutsch", "de-DE", "de"),
+    Lang("Italiano", "it-IT", "it"),
+    Lang("Português", "pt-PT", "pt"),
+    Lang("Türkçe", "tr-TR", "tr"),
+    Lang("Русский", "ru-RU", "ru"),
+    Lang("中文", "zh-CN", "zh")
+)
+
 /**
- * Étape 1 et 2 : scan BLE du T8+ (nom "ABCTransBLE"), connexion,
- * lecture des appuis longs sur les boutons rouge (0x02) et bleu (0x04).
- * L'audio (micro / haut-parleur) passe par le Bluetooth classique :
- * appairer d'abord "ABCTrans" dans les réglages Bluetooth du téléphone.
+ * v0.2 : traduction vocale.
+ * Bouton ROUGE maintenu : la personne A parle (langue A) -> traduit en langue B, lu dans le T8+.
+ * Bouton BLEU maintenu  : la personne B parle (langue B) -> traduit en langue A, lu dans le T8+.
+ * Codes BLE sur 0x2541 : 01 = rouge appuyé, 02 = rouge relâché, 03 = bleu appuyé, 04 = bleu relâché
+ * (hypothèse à confirmer par test).
  */
 @SuppressLint("MissingPermission")
 class MainActivity : AppCompatActivity() {
 
     companion object {
         val SERVICE_UUID: UUID = uuid16(0xA035)
-        val CHAR_BUTTONS: UUID = uuid16(0x2541) // NOTIFY : 0x02 = rouge, 0x04 = bleu (appui long)
-        val CHAR_EVENTS: UUID = uuid16(0xA043)  // NOTIFY : rôle inconnu pour l'instant
+        val CHAR_BUTTONS: UUID = uuid16(0x2541)
+        val CHAR_EVENTS: UUID = uuid16(0xA043)
         val CCC_UUID: UUID = uuid16(0x2902)
         const val NAME_PART = "abctrans"
         const val SCAN_TIMEOUT_MS = 20_000L
@@ -57,6 +88,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusView: TextView
     private lateinit var logView: TextView
     private lateinit var scroll: ScrollView
+    private lateinit var spinnerA: Spinner
+    private lateinit var spinnerB: Spinner
+
+    private var recognizer: SpeechRecognizer? = null
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var busy = false
+    private var activeDir = 0 // 1 = rouge, 2 = bleu
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -69,23 +108,60 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 48, 32, 32)
+            setPadding(32, 32, 32, 32)
         }
         statusView = TextView(this).apply { textSize = 18f; text = "Non connecté" }
+        spinnerA = makeSpinner(0)
+        spinnerB = makeSpinner(1)
         val connectBtn = Button(this).apply { text = "Connecter le T8+"; setOnClickListener { onConnectClicked() } }
         val disconnectBtn = Button(this).apply { text = "Déconnecter"; setOnClickListener { disconnect() } }
         logView = TextView(this).apply { textSize = 14f }
         scroll = ScrollView(this).apply { addView(logView) }
 
         root.addView(statusView)
+        root.addView(TextView(this).apply { text = "Bouton ROUGE : la personne parle en" })
+        root.addView(spinnerA)
+        root.addView(TextView(this).apply { text = "Bouton BLEU : la personne parle en" })
+        root.addView(spinnerB)
         root.addView(connectBtn)
         root.addView(disconnectBtn)
-        root.addView(scroll, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
+
+        tts = TextToSpeech(this) { status ->
+            ttsReady = status == TextToSpeech.SUCCESS
+            if (ttsReady) {
+                tts?.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {}
+                    override fun onDone(utteranceId: String?) { runOnUiThread { finishSession() } }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) { runOnUiThread { finishSession() } }
+                })
+            } else {
+                log("Synthèse vocale indisponible sur ce téléphone.")
+            }
+        }
 
         log("Avant de commencer : appaire « ABCTrans » dans Paramètres > Bluetooth (audio).")
     }
+
+    private fun makeSpinner(default: Int): Spinner = Spinner(this).apply {
+        adapter = ArrayAdapter(
+            this@MainActivity,
+            android.R.layout.simple_spinner_dropdown_item,
+            LANGS.map { it.name }
+        )
+        setSelection(default)
+    }
+
+    private fun langA(): Lang = LANGS[spinnerA.selectedItemPosition]
+    private fun langB(): Lang = LANGS[spinnerB.selectedItemPosition]
 
     // ---------- Permissions ----------
 
@@ -106,12 +182,12 @@ class MainActivity : AppCompatActivity() {
         if (missing.isEmpty()) startScan() else permissionLauncher.launch(missing.toTypedArray())
     }
 
-    // ---------- Scan ----------
+    // ---------- Scan BLE ----------
 
     private val stopScanRunnable = Runnable {
         if (scanning) {
             stopScan()
-            log("Aucun T8+ trouvé. Vérifie qu'il est allumé et proche.")
+            log("Aucun T8+ trouvé. Vérifie qu'il est allumé et proche, puis réessaie.")
             setStatus("Non connecté")
         }
     }
@@ -178,6 +254,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun disconnect() {
         stopScan()
+        cancelSession()
+        releaseAudio()
         gatt?.let {
             it.disconnect()
             it.close()
@@ -196,6 +274,7 @@ class MainActivity : AppCompatActivity() {
                 g.close()
                 runOnUiThread {
                     if (gatt === g) gatt = null
+                    releaseAudio()
                     setStatus("Déconnecté")
                     log("Déconnecté (status $status)")
                 }
@@ -222,17 +301,13 @@ class MainActivity : AppCompatActivity() {
         @Deprecated("Deprecated in Java")
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
             val v = c.value ?: return
-            val hex = v.joinToString(" ") { "%02X".format(it) }
-            val text = if (c.uuid == CHAR_BUTTONS && v.size == 1) {
-                when (v[0].toInt()) {
-                    0x02 -> "Bouton ROUGE (appui long)"
-                    0x04 -> "Bouton BLEU (appui long)"
-                    else -> "Bouton inconnu : $hex"
-                }
+            if (c.uuid == CHAR_BUTTONS && v.size == 1) {
+                val code = v[0].toInt() and 0xFF
+                runOnUiThread { onButtonEvent(code) }
             } else {
-                "Notification ${c.uuid.toString().substring(4, 8)} : $hex"
+                val hex = v.joinToString(" ") { "%02X".format(it) }
+                runOnUiThread { log("Notification ${c.uuid.toString().substring(4, 8)} : $hex") }
             }
-            runOnUiThread { log(text) }
         }
     }
 
@@ -240,7 +315,8 @@ class MainActivity : AppCompatActivity() {
         if (pending.isEmpty()) {
             runOnUiThread {
                 setStatus("T8+ connecté")
-                log("Prêt. Fais un appui long sur le rouge ou le bleu.")
+                routeToHeadset()
+                log("Prêt. Maintiens le bouton rouge ou bleu, parle, puis relâche.")
             }
             return
         }
@@ -255,6 +331,169 @@ class MainActivity : AppCompatActivity() {
         g.writeDescriptor(d)
     }
 
+    // ---------- Audio : utiliser le T8+ comme casque (micro + haut-parleur) ----------
+
+    private fun routeToHeadset() {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        am.mode = AudioManager.MODE_IN_COMMUNICATION
+        if (Build.VERSION.SDK_INT >= 31) {
+            val dev = am.availableCommunicationDevices.firstOrNull {
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+            }
+            if (dev != null) {
+                am.setCommunicationDevice(dev)
+                log("Audio : ${dev.productName} utilisé comme micro et haut-parleur.")
+            } else {
+                log("Audio : « ABCTrans » n'est pas connecté comme casque. Appaire-le dans Paramètres > Bluetooth.")
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            am.startBluetoothSco()
+            @Suppress("DEPRECATION")
+            am.isBluetoothScoOn = true
+        }
+    }
+
+    private fun releaseAudio() {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        if (Build.VERSION.SDK_INT >= 31) {
+            am.clearCommunicationDevice()
+        } else {
+            @Suppress("DEPRECATION")
+            am.stopBluetoothSco()
+            @Suppress("DEPRECATION")
+            am.isBluetoothScoOn = false
+        }
+        am.mode = AudioManager.MODE_NORMAL
+    }
+
+    // ---------- Boutons -> reconnaissance -> traduction -> lecture ----------
+
+    private fun onButtonEvent(code: Int) {
+        when (code) {
+            0x01 -> startListening(1)
+            0x03 -> startListening(2)
+            0x02, 0x04 -> {
+                if (activeDir != 0) recognizer?.stopListening()
+            }
+            else -> log("Code bouton non géré : %02X".format(code))
+        }
+    }
+
+    private fun startListening(dir: Int) {
+        if (busy) {
+            log("Occupé, attends la fin de la lecture.")
+            return
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            log("Reconnaissance vocale indisponible : installe/active l'application Google.")
+            return
+        }
+        busy = true
+        activeDir = dir
+        val src = if (dir == 1) langA() else langB()
+        recognizer?.destroy()
+        recognizer = SpeechRecognizer.createSpeechRecognizer(this).also {
+            it.setRecognitionListener(recListener)
+        }
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, src.tag)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+        }
+        log("Écoute (${src.name})…")
+        recognizer?.startListening(intent)
+    }
+
+    private val recListener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {}
+        override fun onBeginningOfSpeech() {}
+        override fun onRmsChanged(rmsdB: Float) {}
+        override fun onBufferReceived(buffer: ByteArray?) {}
+        override fun onEndOfSpeech() {}
+        override fun onPartialResults(partialResults: Bundle?) {}
+        override fun onEvent(eventType: Int, params: Bundle?) {}
+
+        override fun onError(error: Int) {
+            log("Reconnaissance : erreur $error (7 = rien compris, 6 = silence, 9 = permission micro)")
+            finishSession()
+        }
+
+        override fun onResults(results: Bundle?) {
+            val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+            if (text.isNullOrBlank()) {
+                log("Rien reconnu.")
+                finishSession()
+                return
+            }
+            val dir = activeDir
+            val src = if (dir == 1) langA() else langB()
+            val dst = if (dir == 1) langB() else langA()
+            log("${src.name} : $text")
+            translateAndSpeak(text, src, dst)
+        }
+    }
+
+    private fun translateAndSpeak(text: String, src: Lang, dst: Lang) {
+        if (src.ml == dst.ml) {
+            speak(text, dst)
+            return
+        }
+        val options = TranslatorOptions.Builder()
+            .setSourceLanguage(src.ml)
+            .setTargetLanguage(dst.ml)
+            .build()
+        val translator = Translation.getClient(options)
+        log("Traduction ${src.name} → ${dst.name}… (le premier usage télécharge le modèle, Internet requis)")
+        translator.downloadModelIfNeeded(DownloadConditions.Builder().build())
+            .addOnSuccessListener {
+                translator.translate(text)
+                    .addOnSuccessListener { out ->
+                        translator.close()
+                        log("${dst.name} : $out")
+                        speak(out, dst)
+                    }
+                    .addOnFailureListener { e ->
+                        translator.close()
+                        log("Échec de la traduction : ${e.message}")
+                        finishSession()
+                    }
+            }
+            .addOnFailureListener { e ->
+                translator.close()
+                log("Modèle de langue non téléchargé (Internet ?) : ${e.message}")
+                finishSession()
+            }
+    }
+
+    private fun speak(text: String, lang: Lang) {
+        if (!ttsReady) {
+            log("Synthèse vocale non prête.")
+            finishSession()
+            return
+        }
+        val t = tts ?: return
+        val res = t.setLanguage(Locale.forLanguageTag(lang.tag))
+        if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
+            log("Voix ${lang.name} non installée sur ce téléphone (Paramètres > Synthèse vocale).")
+            finishSession()
+            return
+        }
+        t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "t8-utterance")
+    }
+
+    private fun finishSession() {
+        busy = false
+        activeDir = 0
+    }
+
+    private fun cancelSession() {
+        recognizer?.destroy()
+        recognizer = null
+        tts?.stop()
+        finishSession()
+    }
+
     // ---------- Utilitaires UI ----------
 
     private fun setStatus(s: String) = runOnUiThread { statusView.text = s }
@@ -266,6 +505,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         disconnect()
+        tts?.shutdown()
         super.onDestroy()
     }
 }
