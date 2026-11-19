@@ -33,7 +33,7 @@
     <application
         android:allowBackup="true"
         android:label="T8 Translator"
-        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
         <activity
             android:name=".MainActivity"
             android:exported="true">
