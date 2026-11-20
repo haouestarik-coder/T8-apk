@@ -42,6 +42,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.common.model.RemoteModelManager
+import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
 import java.util.Locale
@@ -56,13 +58,62 @@ private val LANGS = listOf(
     Lang("Français", "fr-FR", "fr", "🇫🇷"),
     Lang("English", "en-US", "en", "🇺🇸"),
     Lang("العربية", "ar-SA", "ar", "🇸🇦"),
-    Lang("Español", "es-ES", "es", "🇪🇸"),
+    Lang("Afrikaans", "af-ZA", "af", "🇿🇦"),
+    Lang("Shqip", "sq-AL", "sq", "🇦🇱"),
+    Lang("Беларуская", "be-BY", "be", "🇧🇾"),
+    Lang("Български", "bg-BG", "bg", "🇧🇬"),
+    Lang("বাংলা", "bn-BD", "bn", "🇧🇩"),
+    Lang("Català", "ca-ES", "ca", "🇪🇸"),
+    Lang("中文", "zh-CN", "zh", "🇨🇳"),
+    Lang("Hrvatski", "hr-HR", "hr", "🇭🇷"),
+    Lang("Čeština", "cs-CZ", "cs", "🇨🇿"),
+    Lang("Dansk", "da-DK", "da", "🇩🇰"),
+    Lang("Nederlands", "nl-NL", "nl", "🇳🇱"),
+    Lang("Esperanto", "eo", "eo", "🌐"),
+    Lang("Eesti", "et-EE", "et", "🇪🇪"),
+    Lang("Suomi", "fi-FI", "fi", "🇫🇮"),
+    Lang("Galego", "gl-ES", "gl", "🇪🇸"),
+    Lang("ქართული", "ka-GE", "ka", "🇬🇪"),
     Lang("Deutsch", "de-DE", "de", "🇩🇪"),
+    Lang("Ελληνικά", "el-GR", "el", "🇬🇷"),
+    Lang("ગુજરાતી", "gu-IN", "gu", "🇮🇳"),
+    Lang("Kreyòl ayisyen", "ht-HT", "ht", "🇭🇹"),
+    Lang("עברית", "he-IL", "he", "🇮🇱"),
+    Lang("हिन्दी", "hi-IN", "hi", "🇮🇳"),
+    Lang("Magyar", "hu-HU", "hu", "🇭🇺"),
+    Lang("Íslenska", "is-IS", "is", "🇮🇸"),
+    Lang("Bahasa Indonesia", "id-ID", "id", "🇮🇩"),
+    Lang("Gaeilge", "ga-IE", "ga", "🇮🇪"),
     Lang("Italiano", "it-IT", "it", "🇮🇹"),
+    Lang("日本語", "ja-JP", "ja", "🇯🇵"),
+    Lang("ಕನ್ನಡ", "kn-IN", "kn", "🇮🇳"),
+    Lang("한국어", "ko-KR", "ko", "🇰🇷"),
+    Lang("Lietuvių", "lt-LT", "lt", "🇱🇹"),
+    Lang("Latviešu", "lv-LV", "lv", "🇱🇻"),
+    Lang("Македонски", "mk-MK", "mk", "🇲🇰"),
+    Lang("मराठी", "mr-IN", "mr", "🇮🇳"),
+    Lang("Bahasa Melayu", "ms-MY", "ms", "🇲🇾"),
+    Lang("Malti", "mt-MT", "mt", "🇲🇹"),
+    Lang("Norsk", "nb-NO", "no", "🇳🇴"),
+    Lang("فارسی", "fa-IR", "fa", "🇮🇷"),
+    Lang("Polski", "pl-PL", "pl", "🇵🇱"),
     Lang("Português", "pt-PT", "pt", "🇵🇹"),
-    Lang("Türkçe", "tr-TR", "tr", "🇹🇷"),
+    Lang("Română", "ro-RO", "ro", "🇷🇴"),
     Lang("Русский", "ru-RU", "ru", "🇷🇺"),
-    Lang("中文", "zh-CN", "zh", "🇨🇳")
+    Lang("Slovenčina", "sk-SK", "sk", "🇸🇰"),
+    Lang("Slovenščina", "sl-SI", "sl", "🇸🇮"),
+    Lang("Español", "es-ES", "es", "🇪🇸"),
+    Lang("Kiswahili", "sw-KE", "sw", "🇰🇪"),
+    Lang("Svenska", "sv-SE", "sv", "🇸🇪"),
+    Lang("Tagalog", "fil-PH", "tl", "🇵🇭"),
+    Lang("தமிழ்", "ta-IN", "ta", "🇮🇳"),
+    Lang("తెలుగు", "te-IN", "te", "🇮🇳"),
+    Lang("ไทย", "th-TH", "th", "🇹🇭"),
+    Lang("Türkçe", "tr-TR", "tr", "🇹🇷"),
+    Lang("Українська", "uk-UA", "uk", "🇺🇦"),
+    Lang("اردو", "ur-PK", "ur", "🇵🇰"),
+    Lang("Tiếng Việt", "vi-VN", "vi", "🇻🇳"),
+    Lang("Cymraeg", "cy-GB", "cy", "🇬🇧")
 )
 
 private const val RED = 0xFFD32F2F.toInt()
@@ -103,6 +154,8 @@ class MainActivity : AppCompatActivity() {
 
     private var idxA = 0
     private var idxB = 1
+    private val downloaded = mutableSetOf<String>()
+    private val downloading = mutableSetOf<String>()
 
     private var recognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
@@ -110,6 +163,12 @@ class MainActivity : AppCompatActivity() {
     private var busy = false
     private var activeDir = 0 // 1 = rouge, 2 = bleu
     private var sessionId = 0
+    private val watchdog = Runnable {
+        if (busy) {
+            log("Délai dépassé, réessaie.")
+            cancelSession()
+        }
+    }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -125,6 +184,7 @@ class MainActivity : AppCompatActivity() {
         buildUi()
         initTts()
         log("Appaire « ABCTrans » dans Paramètres > Bluetooth pour l'audio.", false)
+        refreshDownloaded { ensureModels(LANGS[idxA], LANGS[idxB]) }
         requestAndScan()
     }
 
@@ -256,7 +316,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pickLang(isA: Boolean) {
-        val names = LANGS.map { "${it.flag}  ${it.name}" }.toTypedArray()
+        val names = LANGS.map { (if (downloaded.contains(it.ml)) "✓ " else "") + "${it.flag}  ${it.name}" }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle(if (isA) "Bouton ROUGE : parle en" else "Bouton BLEU : parle en")
             .setItems(names) { _, which ->
@@ -267,20 +327,77 @@ class MainActivity : AppCompatActivity() {
                 }
                 savePrefs()
                 updateLangViews()
+                ensureModels(LANGS[which])
             }
             .show()
     }
 
     private fun showMenu() {
         AlertDialog.Builder(this)
-            .setItems(arrayOf("Reconnecter le T8+", "Effacer la conversation", "Journal technique")) { _, which ->
+            .setItems(arrayOf("Langues hors ligne (télécharger)", "Reconnecter le T8+", "Effacer la conversation", "Journal technique")) { _, which ->
                 when (which) {
-                    0 -> requestAndScan()
-                    1 -> clearChat()
+                    0 -> showLanguageManager()
+                    1 -> requestAndScan()
+                    2 -> clearChat()
                     else -> showDebug()
                 }
             }
             .show()
+    }
+
+    // ---------- Modèles de traduction hors ligne ----------
+
+    private fun refreshDownloaded(then: (() -> Unit)? = null) {
+        RemoteModelManager.getInstance().getDownloadedModels(TranslateRemoteModel::class.java)
+            .addOnSuccessListener { models ->
+                downloaded.clear()
+                downloaded.addAll(models.map { it.language })
+                then?.invoke()
+            }
+            .addOnFailureListener { log("Impossible de lire les modèles installés.", false) }
+    }
+
+    private fun downloadModel(lang: Lang) {
+        if (downloaded.contains(lang.ml) || !downloading.add(lang.ml)) return
+        log("⬇ Téléchargement : ${lang.name}…")
+        val model = TranslateRemoteModel.Builder(lang.ml).build()
+        RemoteModelManager.getInstance().download(model, DownloadConditions.Builder().build())
+            .addOnSuccessListener {
+                downloading.remove(lang.ml)
+                downloaded.add(lang.ml)
+                log("✓ ${lang.name} disponible hors ligne")
+            }
+            .addOnFailureListener {
+                downloading.remove(lang.ml)
+                log("Échec du téléchargement de ${lang.name} (Internet ?)")
+            }
+    }
+
+    // Télécharge les langues données + l'anglais (langue pivot de ML Kit)
+    private fun ensureModels(vararg langs: Lang) {
+        val codes = (langs.map { it.ml } + "en").distinct()
+        codes.forEach { code ->
+            LANGS.firstOrNull { it.ml == code }?.let { downloadModel(it) }
+        }
+    }
+
+    private fun showLanguageManager() {
+        refreshDownloaded {
+            val names = LANGS.map { (if (downloaded.contains(it.ml)) "✓ " else "⬇ ") + "${it.flag}  ${it.name}" }.toTypedArray()
+            val checked = BooleanArray(LANGS.size) { false }
+            AlertDialog.Builder(this)
+                .setTitle("Langues hors ligne (coche puis Télécharger)")
+                .setMultiChoiceItems(names, checked) { _, which, isChecked -> checked[which] = isChecked }
+                .setPositiveButton("Télécharger") { _, _ ->
+                    LANGS.forEachIndexed { i, l -> if (checked[i]) downloadModel(l) }
+                    downloadModel(LANGS[1])
+                }
+                .setNeutralButton("Tout télécharger") { _, _ ->
+                    LANGS.forEach { downloadModel(it) }
+                }
+                .setNegativeButton("Fermer", null)
+                .show()
+        }
     }
 
     private fun showDebug() {
@@ -543,7 +660,7 @@ class MainActivity : AppCompatActivity() {
                 am.setCommunicationDevice(dev)
                 log("Audio : ${dev.productName} = micro et haut-parleur.", false)
             } else {
-                log("« ABCTrans » n'est pas appairé en audio : Paramètres > Bluetooth.")
+                log("Audio : casque ABCTrans non détecté en mode communication.", false)
             }
         } else {
             @Suppress("DEPRECATION")
@@ -627,6 +744,8 @@ class MainActivity : AppCompatActivity() {
         }
         busy = true
         activeDir = dir
+        handler.removeCallbacks(watchdog)
+        handler.postDelayed(watchdog, 30_000)
         sessionId++
         val sid = sessionId
         val src = LANGS[if (dir == 1) idxA else idxB]
@@ -656,11 +775,16 @@ class MainActivity : AppCompatActivity() {
 
         override fun onError(error: Int) {
             if (sid != sessionId) return
+            if (error == 11) {
+                // Le service Google se reconnecte : la reconnaissance continue en général.
+                log("Service vocal : reconnexion (11)", false)
+                return
+            }
             val msg = when (error) {
                 7 -> "Je n'ai rien compris, réessaie."
                 6 -> "Aucune voix détectée."
                 9 -> "Permission du micro refusée."
-                11 -> "Service vocal déconnecté, réessaie."
+                12, 13 -> "Reconnaissance vocale indisponible pour cette langue (voir réglages vocaux Google)."
                 else -> "Erreur de reconnaissance ($error)."
             }
             log(msg)
@@ -728,10 +852,13 @@ class MainActivity : AppCompatActivity() {
             finishSession()
             return
         }
+        handler.removeCallbacks(watchdog)
+        handler.postDelayed(watchdog, 60_000)
         t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "t8-utterance")
     }
 
     private fun finishSession() {
+        handler.removeCallbacks(watchdog)
         busy = false
         activeDir = 0
     }

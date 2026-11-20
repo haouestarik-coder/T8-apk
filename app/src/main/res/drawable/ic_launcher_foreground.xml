@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Bulle rouge -->
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M30,26 L54,26 A8,8 0 0 1 62,34 L62,46 A8,8 0 0 1 54,54 L38,54 L28,64 L28,54 L30,54 A8,8 0 0 1 22,46 L22,34 A8,8 0 0 1 30,26 Z" />
+    <!-- Bulle bleue -->
+    <path
+        android:fillColor="#1E6FD9"
+        android:strokeColor="#F4F7FB"
+        android:strokeWidth="2.5"
+        android:pathData="M54,44 L78,44 A8,8 0 0 1 86,52 L86,64 A8,8 0 0 1 78,72 L76,72 L80,82 L64,72 L54,72 A8,8 0 0 1 46,64 L46,52 A8,8 0 0 1 54,44 Z" />
+    <!-- Flèche vers la droite (bulle rouge) -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M31,40 L50,40 M44,34 L50,40 L44,46" />
+    <!-- Flèche vers la gauche (bulle bleue) -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M77,58 L58,58 M64,52 L58,58 L64,64" />
+</vector>
